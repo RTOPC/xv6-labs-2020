@@ -22,6 +22,31 @@ struct {
   struct spinlock lock;
   struct run *freelist;
 } kmem;
+int
+freemem_num(void){
+  struct run *r;
+  int num = 0;
+  for(r = kmem.freelist; r; r = r->next){
+    num++;
+  }
+  return num * PGSIZE;//4096 PGSIZE
+}
+/*
+void
+freebytes(uint64 * dst)
+{
+  *dst = 0;
+  struct run *p = kmem.freelist;
+
+  acquire(&kmem.lock);//自旋锁
+  while(p){
+    *dst += PGSIZE;
+    p = p->next;
+  }
+  release(&kmem.lock);
+}
+
+*/
 
 void
 kinit()

@@ -20,8 +20,8 @@ main(int argc, char *argv[])
   }
   
   for(i = 2; i < argc && i < MAXARG; i++){
-    nargv[i-2] = argv[i];
+    nargv[i-2] = argv[i];//复制，去除前两个参数
   }
-  exec(nargv[0], nargv);
+  exec(nargv[0], nargv);//
   exit(0);
 }

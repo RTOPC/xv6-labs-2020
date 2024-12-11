@@ -259,7 +259,7 @@ int
 fork(void)
 {
   int i, pid;
-  struct proc *np;
+  struct proc *np;//子
   struct proc *p = myproc();
 
   // Allocate process.
@@ -290,6 +290,9 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
+  //将trace_mask拷贝到子进程
+  np->trace_mask = p->trace_mask;
 
   pid = np->pid;
 
@@ -693,3 +696,29 @@ procdump(void)
     printf("\n");
   }
 }
+
+//获取进程数目
+int
+proc_num(void){
+  struct proc *p;
+  uint64 num = 0;
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state !=UNUSED){
+      num++;
+    }
+  }
+  return num;
+}
+/*
+void
+procnum(uint64 *dst)
+{
+  *dst = 0;
+  struct proc *p;
+  for(p = proc; p < &p[NPROC]; p++){
+    if(p->state != UNUSED){
+      (*dst)++;
+    }
+  }
+}
+*/
