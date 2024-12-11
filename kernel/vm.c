@@ -117,7 +117,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
 void
 kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 {
-  if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
+  if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)//将范围虚拟地址到等同范围物理地址的映射装到一个页表中
     panic("kvmmap");
 }
 
