@@ -58,6 +58,8 @@ sys_sleep(void)
   int n;
   uint ticks0;
 
+  _backtrace();
+
   if(argint(0, &n) < 0)
     return -1;
   acquire(&tickslock);
@@ -94,4 +96,22 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+//lab4 trap
+uint64
+sys_sigalarm(void)
+{
+  int n; //n个ticks
+  uint64 fn; //时钟回调函数
+  if(argint(0, &n) < 0)//获取第一个参数
+    return -1;
+  if(argaddr(1, &fn) < 0)//获取第二个参数
+    return -1;
+  //调用并返回_sigalarm函数
+  return _sigalarm(n, (void(*)())(fn));
+}
+
+uint64
+sys_sigreturn(void){
+  return _sigreturn();
 }

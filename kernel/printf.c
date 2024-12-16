@@ -132,3 +132,15 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+//遍历栈帧打印函数地址
+void _backtrace()
+{
+  uint64 fp = r_fp();
+  printf("bracktrace:\n");
+  while(PGROUNDDOWN(fp) != PGROUNDUP(fp)){//当前帧指针fp是否在有效的页范围内
+    uint64 ra = *(uint64*)(fp - 8);
+    printf("%p\n",ra);
+    fp = *(uint64*)(fp - 16);
+  }
+}
