@@ -67,7 +67,11 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }else if((r_scause() == 13 || r_scause() == 15) && _uvmcheckcowpage(r_stval())){//实际上只需要scause==15，13是读错误，COW理论上不会有
+    //发生页面错误，并且检测处错误是写时复制机制导致的页面不可写，则执行写时复制
+    if(_uvmcowcopy(r_stval()) == -1)
+      p->killed = 1;
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
@@ -81,6 +85,39 @@ usertrap(void)
     yield();
 
   usertrapret();
+}
+
+//检查虚拟地址所在页是否是COW页
+int _uvmcheckcowpage(uint64 va){
+  pte_t* pte;
+  struct proc* p = myproc();
+  return va < p->sz
+        && ((pte = walk(p->pagetable, va, 0)) != 0)
+        && (*pte & PTE_V)
+        && (*pte & PTE_COW);
+}
+//写时复制函数实现
+int _uvmcowcopy(uint64 va){
+  pte_t* pte;
+  struct proc* p = myproc();
+
+  if((pte = walk(p->pagetable, va, 0)) == 0) //获取虚拟地址页表项
+    panic("uvmcowcopy: walk");
+  
+  uint64 pa = PTE2PA(*pte);
+  uint64 new = (uint64)_kcopy_n_deref((void*)pa); //获取新分配的页面
+
+  if(new == 0)//若是内存不足
+    return -1;
+  
+  //修改新的映射，恢复写权限，清楚COW标志
+  uint64 flags = (PTE_FLAGS(*pte) | PTE_W) & ~PTE_COW;
+
+  uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 0); //清除旧的映射
+  if(mappages(p->pagetable, va, 1, new, flags) == -1){
+    panic("uvmcowcopy: mappages");
+  }
+  return 0;
 }
 
 //
