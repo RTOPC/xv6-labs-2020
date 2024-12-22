@@ -67,14 +67,29 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  }else if((r_scause() == 13 || r_scause() == 15) && _uvmcheckcowpage(r_stval())){//实际上只需要scause==15，13是读错误，COW理论上不会有
+  }
+  /*
+    else if((r_scause() == 13 || r_scause() == 15) && _uvmcheckcowpage(r_stval())){//实际上只需要scause==15，13是读错误，COW理论上不会有
     //发生页面错误，并且检测处错误是写时复制机制导致的页面不可写，则执行写时复制
     if(_uvmcowcopy(r_stval()) == -1)
       p->killed = 1;
-  }else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  }
+  */
+  else {
+    uint64 va = r_stval();
+    if((r_scause() == 13 || r_scause() == 15) &&(_uvmshouldallocate(va) || _uvmcheckcowpage(va))){
+      if(_uvmshouldallocate(va)){
+        _uvmlazyallocate(va);//分配
+      }else if(_uvmcheckcowpage(va)){
+        if(_uvmcowcopy(va) == -1)//分配
+          p->killed = 1;
+      }
+    }
+    else{
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)

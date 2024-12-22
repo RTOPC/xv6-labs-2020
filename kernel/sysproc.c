@@ -43,12 +43,22 @@ sys_sbrk(void)
 {
   int addr;
   int n;
-
+  
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
+  /*
   if(growproc(n) < 0)
     return -1;
+  */
+  struct proc* p = myproc();
+  //惰性分配
+  if(n > 0)
+    p->sz += n;
+  else if(p->sz + n > 0) //如果是减少内存，则需要检查减去内存后是否大于0
+    p->sz = uvmdealloc(p->pagetable, p->sz, p->sz + n);
+  else  return -1;
+
   return addr;
 }
 
