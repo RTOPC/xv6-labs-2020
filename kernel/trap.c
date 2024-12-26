@@ -7,7 +7,7 @@
 #include "defs.h"
 
 struct spinlock tickslock;
-uint ticks;
+uint ticks;//
 
 extern char trampoline[], uservec[], userret[];
 
