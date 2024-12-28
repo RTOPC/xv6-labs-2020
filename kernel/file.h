@@ -16,7 +16,7 @@ struct file {
 // in-memory copy of an inode
 struct inode {
   uint dev;           // Device number
-  uint inum;          // Inode number
+  uint inum;          // Inod e number
   int ref;            // Reference count
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
@@ -26,7 +26,7 @@ struct inode {
   short minor;
   short nlink;
   uint size;
-  uint addrs[NDIRECT+1];
+  uint addrs[NDIRECT+2]; //
 };
 
 // map major device number to device functions.

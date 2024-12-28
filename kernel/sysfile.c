@@ -282,7 +282,7 @@ create(char *path, short type, short major, short minor)
 
   return ip;
 }
-
+//
 uint64
 sys_open(void)
 {
@@ -304,11 +304,30 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+    int symlink_depth = 0;
+    //循环调用namei获取对应inode，如果指向软链接就继续读取，知道找到真文件
+    while(1){
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){ //如果当前指向的仍是软链接，则继续循环
+        if(++symlink_depth > 10){//链接层大于10
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        if(readi(ip, 0, (uint64)path, 0, MAXPATH) < 0){ //读取链接的目标路径
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip);
+      }else{
+        break;
+      }
     }
-    ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -482,5 +501,32 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+//软链接
+uint64
+sys_symlink(void){
+  struct inode* ip;
+  char target[MAXPATH], path[MAXPATH];//path处创建指向target的符号链接
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+  
+  begin_op();//开启事务
+
+  ip = create(path, T_SYMLINK, 0, 0);//创建一个新的inode，创建目录项，使得path可以找到inode
+  if(ip == 0){
+    end_op();
+    return -1;//失败
+  }
+  //将target路径写inode，也就是将符号链接的target写入到新inode数据，文件内容就变为目标路target
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) < 0){
+    end_op();
+    return -1;
+  }
+  iunlockput(ip);//解锁创建的inode并使其引用计数-1，表示创建软连接的操作结果，释放锁。
+  end_op();
+
   return 0;
 }

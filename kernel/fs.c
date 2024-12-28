@@ -374,23 +374,56 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+//根据需要分配新块以保存文件内容，如果需要，还会分配间接块以保存块地址
+//readi(读inode)和writei中使用
 static uint
-bmap(struct inode *ip, uint bn)
+bmap(struct inode *ip, uint bn)//ip inode,bn 块号数
 {
   uint addr, *a;
   struct buf *bp;
-
+  
+  // 如果bn小于直接块数量，则按直接映射处理
   if(bn < NDIRECT){
-    if((addr = ip->addrs[bn]) == 0)
+    if((addr = ip->addrs[bn]) == 0) // 对应物理块号为0，没有分配，则直接分配新物理块缓存，建立映射
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
+  // 间接块，减去直接块得到间接块的逻辑块号
   bn -= NDIRECT;
 
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    //间接块没分配，则分配
+    if((addr = ip->addrs[NDIRECT]) == 0)          // 0 ~ NDIRECT - 1直接块
+      ip->addrs[NDIRECT] = addr = balloc(ip->dev);//
+
+    //获取刚分配的缓存块，检查bn对应的块，如果为0则没有分配，建立映射
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn]) == 0){
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);         //建立映射结束，释放缓存块
+    return addr;
+  }
+
+  //到此已经是二级间接块
+  bn -= NINDIRECT;
+
+  if(bn < NINDIRECT * NINDIRECT){
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn / NINDIRECT]) == 0){ //bn处在二级索引中间级的第 bn/NINDIRECT 个索引处
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    //最后一级索引
+    bn %= NINDIRECT;
     bp = bread(ip->dev, addr);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
@@ -406,20 +439,21 @@ bmap(struct inode *ip, uint bn)
 
 // Truncate inode (discard contents).
 // Caller must hold ip->lock.
+// 释放inode所映射的所有数据块
 void
 itrunc(struct inode *ip)
 {
   int i, j;
   struct buf *bp;
   uint *a;
-
+  //释放直接
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
-
+  // 释放一级索引
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -430,6 +464,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+  // 释放二级间接块的映射
+  if(ip->addrs[NDIRECT + 1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a= (uint*)bp->data;
+    for(int i = 0; i < NINDIRECT; ++i){
+      if(a[i]){
+        struct buf* bp2 = bread(ip->dev, a[i]);//类似于页表ppt
+        uint* a2 = (uint*)bp2->data;
+        for(int j = 0; j < NINDIRECT; ++j){
+          if(a2[j])
+            bfree(ip->dev, a2[j]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[i]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
@@ -452,6 +506,7 @@ stati(struct inode *ip, struct stat *st)
 // Caller must hold ip->lock.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
+// 读inode
 int
 readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {
