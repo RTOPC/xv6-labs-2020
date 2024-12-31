@@ -5,7 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "fcntl.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "file.h"
+#include "sleeplock.h"
 /*
  * the kernel's page table.
  */
@@ -172,7 +176,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      //panic("uvmunmap: not mapped");
+      continue;
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -180,6 +185,44 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       kfree((void*)pa);
     }
     *pte = 0;
+  }
+}
+//释放对于mmap的映射的页，根据PTE_D和MAP_SHARED判断是否将修改写回磁盘
+void vmaunmap(pagetable_t pagetable, uint64 va, uint64 nbytes, struct _vma* v, int lazy){
+  uint64 a;
+  pte_t* pte;
+
+  for(a = va; a < va + nbytes; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0){//读取va对应pte
+      if(lazy){
+        continue;
+      }
+      panic("sys_munmap: walk");
+    }    
+
+    if(PTE_FLAGS(*pte) == PTE_V)//
+      panic("sys_munmap: not a leaf");
+    
+    if(*pte & PTE_V){
+      uint64 pa = PTE2PA(*pte);//
+      if((*pte & PTE_D) && (v->flags & MAP_SHARED)){//将修改写回磁盘
+        begin_op();
+        ilock(v->f->ip);
+        uint64 aoff = a - v->vastart;               //相对于vma的偏移量
+
+        if(aoff < 0)//
+          writei(v->f->ip, 0, pa + (-aoff), v->offset, PGSIZE + aoff);//第一页是不满PGSIZE的一个页，表示vma起始大于va起始，第三参数找到起始位置,最后参数写入的内容长度？
+        else if(aoff + PGSIZE > v->sz)
+          writei(v->f->ip, 0, pa, v->offset + aoff, v->sz - aoff);//最后一页是不满PGSIZE的一个页,第四参数，当前文件的写入开始位置
+        else//
+          writei(v->f->ip, 0, pa, v->offset + aoff, PGSIZE);//中间页处理
+
+        iunlock(v->f->ip);
+        end_op();
+      }
+      kfree((void*) pa);//释放物理
+      *pte = 0;
+    }
   }
 }
 
@@ -306,7 +349,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      //panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

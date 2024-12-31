@@ -8,7 +8,6 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "sleeplock.h"
-
 void
 initsleeplock(struct sleeplock *lk, char *name)
 {

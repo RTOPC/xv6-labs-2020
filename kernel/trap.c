@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,10 +68,22 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  }
+  else if(r_scause() == 13 || r_scause() == 15){
+    uint64 va = r_stval();      //读取当前发生页面错误的地址
+    if(va >= p->mmapstart && va < TRAMPOLINE) {//当前地址在mmap的范围内
+      if(vmalloc(va) == 0){
+        p->killed = 1;
+      } 
+    }else{
+      p->killed = 1;
+    }
+  } 
+  else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+
   }
 
   if(p->killed)
@@ -130,6 +143,7 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
+// 出错位置
 void 
 kerneltrap()
 {
@@ -143,7 +157,7 @@ kerneltrap()
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
-  if((which_dev = devintr()) == 0){
+  if((which_dev = devintr()) == 0){//
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
@@ -173,6 +187,7 @@ clockintr()
 // returns 2 if timer interrupt,
 // 1 if other device,
 // 0 if not recognized.
+// 2定时器中断，1其他中断，0没有中断
 int
 devintr()
 {

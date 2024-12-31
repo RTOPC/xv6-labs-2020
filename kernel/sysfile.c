@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -482,5 +483,146 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+//通过虚拟地址寻到对应的vma
+struct _vma* findvma(struct proc* p, uint64 va){
+  for(int i = 0; i < NVMA; ++i){
+    struct _vma* vv = &p->vmas[i];
+    // 如果va地址在某一个vma范围内，则返回这个vma
+    if(vv->vaild == 1 && va >= vv->vastart && va < vv->vastart + vv->sz){
+      return vv;
+    }
+  }
+  return 0;
+}
+//给虚拟地址分配物理页并建立映射
+int vmalloc(uint64 va){
+  struct proc* p = myproc();
+  struct _vma* v = findvma(p, va);
+
+  //分配物理地址
+  void * pa = kalloc();
+  if(pa == 0){
+    panic("vmalloc: kalloc");
+  }
+  memset(pa, 0, PGSIZE);//
+
+  //从磁盘读取文件
+  begin_op();
+  ilock(v->f->ip);
+  readi(v->f->ip, 0, (uint64)pa, v->offset + PGROUNDDOWN(va - v->vastart), PGSIZE);//
+  iunlock(v->f->ip);
+  end_op();
+  
+  //
+  int perm = PTE_U;
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W;
+  if(v->prot & PROT_EXEC)
+    perm |= PTE_X;
+  
+  //建立映射
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) < 0){
+    panic("vmallpc: mappages");
+  }
+  
+  return 1;
+}
+/*
+void *mmap(void *addr, size_t length, int prot, int flags,
+          int fd, off_t offset)
+*/
+// mmap系统调用的实现
+uint64 
+sys_mmap(void){
+  uint64 addr, sz, offset;
+  int prot, flag, fd;
+  struct file* f;
+
+  //读取传入参数
+  if(argaddr(0, &addr) < 0 || argaddr(1, &sz) < 0 || argint(2, &prot) < 0 || argint(3, &flag) < 0 
+    || argfd(4, &fd, &f) <0 || argaddr(5, &offset) < 0 || sz == 0)
+    return -1;
+
+  //以下情况直接返回-1
+  if((!f->readable && ((prot & (PROT_READ))))                          //源文件不可读，vma映射未可读
+    || (!f->writable && (prot & PROT_WRITE) && !(flag & MAP_PRIVATE))) //源文件不可写，vma映射未可写并且设置了将修改返回源文件
+    return -1;
+
+  sz = PGROUNDUP(sz);
+  struct proc* p = myproc();
+  struct _vma* v = 0;//虚拟内存结构体
+  uint64 vaend = MMAPEND;//
+  
+  // 遍历查询未被使用的vma，并且计算当前已使用的va的最低地址
+  for(int i = 0; i < NVMA; ++i){
+    struct _vma* vv = &p->vmas[i];
+    if(vv->vaild == 0){
+      if(v == 0){       //创建映射
+        v = &p->vmas[i];
+        v->vaild = 1;
+      }
+    }
+    else if(vv->vastart < vaend){
+      vaend = PGROUNDDOWN(vv->vastart);
+    }
+  }
+  //没有找到空闲的vma
+  if(v == 0){
+    panic("mmap:no free vma");
+  }
+
+  //设置vma属性
+  v->vastart = vaend- sz;
+  v->sz = sz;
+  v->f = f;
+  v->prot = prot;
+  v->flags = flag;
+  v->offset = offset;
+
+  //增加源文件引用数
+  filedup(v->f);
+  p->mmapstart = v->vastart;
+  return v->vastart;//返回映射起始地址
+}
+uint64
+sys_munmap(void){
+  uint64 addr, sz;
+  if(argaddr(0, &addr) < 0 || argaddr(1, &sz) || sz == 0){
+    return -1;
+  }
+  struct proc* p = myproc();
+  struct _vma* v = findvma(p, addr);//找到对应VMA区
+  //释放的区域不在vma中
+  if(v == 0)
+    return -1; 
+  //释放的区域不在vma中
+  if(addr > v->vastart && addr + sz < v->vastart + v->sz)
+    return -1;
+  uint64 addr_alinged = addr;
+  if(addr > v->vastart)
+    addr_alinged = PGROUNDUP(addr);//扩展到页的上限，mmap是由高向低生长
+  //释放开始位置要么是区域开始，要么是区域结束，不能在中间打洞
+  int nunmap = sz - (addr_alinged - addr);//需要释放的字节
+  if(nunmap < 0)//若是释放的空间大小小于当前页中写入的内容，则不释放该页内容，防止打洞
+    nunmap = 0;
+
+  vmaunmap(p->pagetable, addr_alinged, nunmap, v, 0);//从addr_alinged开始释放numap字节，前面不要(addr_a到addr)
+
+  if(addr <= v->vastart && addr + sz > v->vastart){//释放区域在，且释放的内容超出
+    v->offset += addr + sz - v->vastart;//重置文件起点
+    v->vastart = addr + sz;//重置开始地址
+  }
+  v->sz -= sz;//更改大小
+
+  if(v->sz <= 0){//关闭该空间
+    fileclose(v->f);
+    v->vaild = 0;
+  }
+
   return 0;
 }

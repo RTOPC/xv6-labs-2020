@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
 
 struct cpu cpus[NCPU];
 
@@ -133,7 +134,12 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
+  p->mmapstart = (uint64)p->trapframe;
+  //初始化时清空vmas数组
+  for(int i = 0; i < NVMA; ++i){
+    p->vmas[i].vaild = 0;
+  }
+  
   return p;
 }
 
@@ -146,6 +152,13 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  //释放页表前，将vmas数组清空
+  for(int i = 0; i < NVMA; i++){
+    struct _vma* v = &p->vmas[i];
+    if(v->sz)
+      vmaunmap(p->pagetable, v->vastart, v->sz, v, 1);
+  }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -157,6 +170,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->mmapstart = 0;
 }
 
 // Create a user page table for a given process,
@@ -295,7 +309,16 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
-
+  
+  //父进程的vmas复制到子进程中，实际内存页和pte不会被复制
+  for(int i = 0; i < NVMA; i++){
+    struct _vma* v = &p->vmas[i];
+    if(v->vaild){
+      np->vmas[i] = *v;
+      filedup(v->f);
+    }
+  }
+  np->mmapstart = p->mmapstart;
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
